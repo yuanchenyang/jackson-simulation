@@ -15,7 +15,7 @@ class Node:
         '''
         mu     : Service rate (average vehicles per time), constant or a function
                  of number of vehicles in node
-        n      : Number of vehicles in the node
+        n      : Initial number of vehicles in the node
         r      : Routing probability from node id to probability
         dt     : Timestep
         '''
@@ -46,23 +46,47 @@ class Node:
         self.n = max(self.n - num_samples, 0)
         return destinations
 
+class Network:
+    def __init__(self, graph):
+        self.graph = graph
+
+    def to_matrix(self):
+        n = len(self.graph)
+        res = []
+        for i in range(n):
+            for j in range(n):
+                res.append(self.graph[i].r.get(j) or 0)
+        return np.reshape(res, (n, n)).T
+
+    def tick(self):
+        '''Simulates one tick of a network'''
+        dest = Counter()
+        for node in self.graph.values():
+            dest.update(node.step())
+        for i, count in dest.items():
+            self.graph[i].add(count)
+
+    def get_counts(self):
+        return zip(*[(i, node.n) for i, node in self.graph.items()])
+
+
 
 def full_network(k, lam, n):
     '''Creates a network of k nodes (fully connected graph) with equal routing
     probabilities and service times, ignoring travel times. Each node starts
     with n vehicles.'''
     prob = 1.0 / (k-1) # Equal probability to go to each node
-    network = {}
+    graph = {}
     for i in range(k):
-        network[i] = Node(lam, n, {j: prob for j in range(k) if j != i})
-    return network
+        graph[i] = Node(lam, n, {j: prob for j in range(k) if j != i})
+    return Network(graph)
 
 def linear_network(k, psi, lam, n):
     '''A network of nodes, with a linear virtual passenger chain from node i
     to node i+1, with service rate psi.'''
     lam, psi = make_callable(lam), make_callable(psi)
     nw = full_network(k, lam, n=n)
-    for i, node in nw.items():
+    for i, node in nw.graph.items():
         if i == k-1: # Don't alter last node in chain
             continue
         node.mu = lambda x: psi(i) + lam(i)
@@ -73,22 +97,3 @@ def linear_network(k, psi, lam, n):
             node.r[j] = newr
         node.check_r()
     return nw
-
-def network_to_matrix(nw):
-    n = len(nw)
-    res = []
-    for i in range(n):
-        for j in range(n):
-            res.append(nw[i].r.get(j) or 0)
-    return np.reshape(res, (n, n)).T
-
-def network_tick(network):
-    '''Simulates one tick of a network'''
-    dest = Counter()
-    for node in network.values():
-        dest.update(node.step())
-    for i, count in dest.items():
-        network[i].add(count)
-
-def get_counts(network):
-    return zip(*[(i, node.n) for i, node in network.items()])
