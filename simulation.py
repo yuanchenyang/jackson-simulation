@@ -22,7 +22,6 @@ class Node:
         self.r = r
         self.check_r()
         self.mu = make_callable(mu)
-        self.dt = dt
         self.n = n  # Number in queue
 
     def check_r(self):
@@ -39,16 +38,10 @@ class Node:
             if p < s: return id
         print p, s, id, self.r
 
-    def step(self):
-        '''Sample cars from Poisson distribution'''
-        num_samples = np.random.poisson(lam=self.mu(self.n) * self.dt)
-        destinations = [self.route_to() for _ in range(min(self.n, num_samples))]
-        self.n = max(self.n - num_samples, 0)
-        return destinations
-
 class Network:
     def __init__(self, graph):
         self.graph = graph
+        self.t = 0
 
     def to_matrix(self):
         n = len(self.graph)
@@ -60,11 +53,27 @@ class Network:
 
     def tick(self):
         '''Simulates one tick of a network'''
-        dest = Counter()
-        for node in self.graph.values():
-            dest.update(node.step())
-        for i, count in dest.items():
-            self.graph[i].add(count)
+        # Get total rates
+        rates = [node.mu(node.n) for node in self.graph.values()]
+        total_rates = float(sum(rates))
+        # Update time
+        dt = np.random.exponential(1/total_rates)
+        self.t += dt
+
+        # Get node to update
+        normalized_rates = [r/total_rates for r in rates]
+        dist = sps.rv_discrete(values=(range(len(rates)), normalized_rates))
+        update = dist.rvs()
+
+        # Update node if it isn't empty
+        if self.graph[update].n == 0:
+            return
+        self.graph[update].n -= 1
+
+        # Pick destination
+        dest_dist = sps.rv_discrete(values=zip(*self.graph[update].r.items()))
+        self.graph[dest_dist.rvs()].n += 1
+
 
     def get_counts(self):
         return zip(*[(i, node.n) for i, node in self.graph.items()])
