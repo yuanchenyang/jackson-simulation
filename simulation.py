@@ -1,6 +1,8 @@
 import numpy as np
 import scipy.linalg as la
 import scipy.stats as sps
+import networkx as nx
+import matplotlib.pyplot as plt
 from collections import Counter
 
 
@@ -11,13 +13,12 @@ def make_callable(x):
 class Node:
     '''A Node object in a Jackson network simulates a queue with an exponential
     service time.'''
-    def __init__(self, mu, n, r, dt=1):
+    def __init__(self, mu, n, r):
         '''
         mu     : Service rate (average vehicles per time), constant or a function
                  of number of vehicles in node
         n      : Initial number of vehicles in the node
         r      : Routing probability from node id to probability
-        dt     : Timestep
         '''
         self.r = r
         self.check_r()
@@ -51,6 +52,21 @@ class Network:
                 res.append(self.graph[i].r.get(j) or 0)
         return np.reshape(res, (n, n)).T
 
+    def as_networkx(self):
+        G = nx.DiGraph()
+        for nodeid, node in self.graph.items():
+            G.add_node(nodeid, {'label': 'n={}, mu={}'\
+                                .format(node.n, round(node.mu(node.n), 3))})
+
+        for nodeid, node in self.graph.items():
+            for nodeid_to, prob in node.r.items():
+                G.add_edge(nodeid, nodeid_to,
+                           {'label': 'p={}'.format(round(prob, 4))})
+        return G
+
+    def write_graphviz(self, filename):
+        nx.write_dot(self.as_networkx(), filename)
+
     def tick(self):
         '''Simulates one tick of a network'''
         # Get total rates
@@ -78,8 +94,6 @@ class Network:
     def get_counts(self):
         return zip(*[(i, node.n) for i, node in self.graph.items()])
 
-
-
 def full_network(k, lam, n):
     '''Creates a network of k nodes (fully connected graph) with equal routing
     probabilities and service times, ignoring travel times. Each node starts
@@ -106,3 +120,13 @@ def linear_network(k, psi, lam, n):
             node.r[j] = newr
         node.check_r()
     return nw
+
+def grid_network_3x3():
+    pass
+
+
+if __name__ == '__main__':
+    N = linear_network(5, 0.1, 1, 15)
+    for _ in range(1000):
+        N.tick()
+    N.write_graphviz('out.dot')
