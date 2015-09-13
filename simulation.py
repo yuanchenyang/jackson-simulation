@@ -10,39 +10,111 @@ from collections import Counter
 def make_callable(x):
     return x if callable(x) else lambda _: x
 
+# Checks if r is a probability distribution
+def check_dist(r):
+    for x, px in r.items():
+        assert px >= 0, 'Not a distribution!'
+    assert abs(sum(r.values()) - 1.0) < 1e-15, 'Not a distribution!'
+
 class Node:
     '''A Node object in a Jackson network simulates a queue with an exponential
     service time.'''
-    def __init__(self, mu, n, r):
+    def __init__(self, id, n, mu):
         '''
-        mu     : Service rate (average vehicles per time), constant or a function
-                 of number of vehicles in node
+        id     : Hashable id given to the node
+        mu     : Service rate (average vehicles per time), a function of the
+                 number of vehicles in node
         n      : Initial number of vehicles in the node
-        r      : Routing probability from node id to probability
         '''
-        self.r = r
-        self.check_r()
-        self.mu = make_callable(mu)
-        self.n = n  # Number in queue
-
-    def check_r(self):
-        assert abs(sum(self.r.values()) - 1.0) < 1e-15, 'Routing probabilities do not sum to 1!'
+        self.id = id
+        self.n = n
+        self.mu = mu
 
     def add(self, n):
         self.n += n
 
+    def service_rate(self):
+        '''Returns the current service rate of this node'''
+        raise NotImplementedError
+
     def route_to(self):
-        '''Samples a destination from the routing probability distribution'''
-        p, s = np.random.sample(), 0
-        for id, prob in self.r.items():
-            s += prob
-            if p < s: return id
-        print p, s, id, self.r
+        '''Randomly samples a destination (node id) from the routing probability
+        distribution'''
+        raise NotImplementedError
+
+class RoadNode(Node):
+    def __init__(self, id, n, mu, rid):
+        '''
+        rid    : Single ID to route to
+        mu     : rate of service for each car
+        '''
+        Node.__init__(self, id, n, mu)
+        self.rid = rid
+
+    def service_rate(self):
+        return self.mu * self.n
+
+    def route_to(self):
+        return rid
+
+class StationNode(Node):
+    def __init__(self, id, n, mu, r):
+        '''
+        r     : Routing probability, dict from node id to probability
+        '''
+        Node.__init__(self, id, n, mu)
+        check_dist(r)
+        self.r = r
+        self.rdist = sps.rv_discrete(values=zip(*r.items()))
+
+    def service_rate(self):
+        return self.mu
+
+    def route_to(self):
+        return self.rdist.rvs(1)
 
 class Network:
-    def __init__(self, graph):
-        self.graph = graph
+    def __init__(self, n, lam, T, p, k):
+        '''Creates a network of n nodes with the following parameters
+
+        n   : Number of nodes
+        lam : lam[i] is the arrival rate at station node i
+        T   : T[i][j] is the average travel time from node i to node j
+        p   : p[i][j] is the routing probability from node i to node j
+        k   : k[i] is the number of vehicles station i starts with
+        '''
+        assert len(k) == len(p) == len(T) == len(lam) == n, 'Seq lengths incorrect!'
+        for a, b in zip(T, p):
+            assert len(a) == len(b) == n, 'Sub-seq lengths incorrect!'
+
+        self.graph = {}
         self.t = 0
+        for i in range(n):
+            r = {}
+            for j in range(n):
+                if i != j:
+                    rn_name = '{}->{}'.format(i, j)
+                    self.add_node(RoadNode(rn_name, 0, T[i][j], j))
+                    r[rn_name] = p[i][j]
+            self.add_node(StationNode(str(i), k[i], lam[i], r))
+
+    def add_node(self, node):
+        self.graph[node.id] = node
+
+    def add_attack(self, i, psi, alpha):
+        ''' Adds attack to node i with arrival rate psi and routing probability
+        alpha
+
+        psi  : A number representing the arrival rate of attackers
+        alpha: A dictionary where alpha[j] is the attackers' routing probability
+               rate from node i to node i
+        '''
+        node = self.graph[i]
+        assert isinstance(node, StationNode), 'Can only attack stations'
+        newlam = node.mu + psi
+        for j in node.r:
+            node.r[j] = (alpha[j] * psi +  node.mu * node.r[j]) / newlam
+        node.mu = newlam
 
     def to_matrix(self):
         n = len(self.graph)
@@ -56,12 +128,15 @@ class Network:
         G = nx.DiGraph()
         for nodeid, node in self.graph.items():
             G.add_node(nodeid, {'label': 'n={}, mu={}'\
-                                .format(node.n, round(node.mu(node.n), 3))})
+                                .format(node.n, round(node.service_rate(), 3))})
 
         for nodeid, node in self.graph.items():
-            for nodeid_to, prob in node.r.items():
-                G.add_edge(nodeid, nodeid_to,
-                           {'label': 'p={}'.format(round(prob, 4))})
+            if isinstance(node, RoadNode):
+                G.add_edge(nodeid, node.rid, {'label': 'p=1'})
+            else:
+                for nodeid_to, prob in node.r.items():
+                    G.add_edge(nodeid, nodeid_to,
+                               {'label': 'p={}'.format(round(prob, 4))})
         return G
 
     def write_graphviz(self, filename):
@@ -70,7 +145,7 @@ class Network:
     def tick(self):
         '''Simulates one tick of a network'''
         # Get total rates
-        rates = [node.mu(node.n) for node in self.graph.values()]
+        rates = [node.service_rate() for node in self.graph.values()]
         total_rates = float(sum(rates))
         # Update time
         dt = np.random.exponential(1/total_rates)
@@ -84,25 +159,21 @@ class Network:
         # Update node if it isn't empty
         if self.graph[update].n == 0:
             return
-        self.graph[update].n -= 1
+        self.graph[update].add(-1)
 
         # Pick destination
-        dest_dist = sps.rv_discrete(values=zip(*self.graph[update].r.items()))
-        self.graph[dest_dist.rvs()].n += 1
+        dest = self.graph[update].route_to()
+        self.graph[dest].add(1)
 
 
     def get_counts(self):
         return zip(*[(i, node.n) for i, node in self.graph.items()])
 
-def full_network(k, lam, n):
-    '''Creates a network of k nodes (fully connected graph) with equal routing
-    probabilities and service times, ignoring travel times. Each node starts
-    with n vehicles.'''
-    prob = 1.0 / (k-1) # Equal probability to go to each node
-    graph = {}
-    for i in range(k):
-        graph[i] = Node(lam, n, {j: prob for j in range(k) if j != i})
-    return Network(graph)
+def full_network(n, lam, T, k):
+    ''' Same routing probabilities, constant lam and t. '''
+    T = [[T if i != j else 0 for i in range(n)] for j in range(n)]
+    p = [[1/float(n-1) if i != j else 0 for i in range(n)] for j in range(n)]
+    return Network(n, [lam] * n, T, p, [k] * n)
 
 def linear_network(k, psi, lam, n):
     '''A network of nodes, with a linear virtual passenger chain from node i
