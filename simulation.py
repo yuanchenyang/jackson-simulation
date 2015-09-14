@@ -17,7 +17,7 @@ def check_dist(r):
     assert abs(sum(r.values()) - 1.0) < 1e-15, 'Not a distribution!'
 
 def from_to(i, j):
-    return float('{}.1{}'.format(i, j))
+    return '{}->{}'.format(i, j)
 
 def sample(dist):
     p, s = np.random.sample(), 0
