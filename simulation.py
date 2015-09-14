@@ -3,7 +3,7 @@ import scipy.linalg as la
 import scipy.stats as sps
 import networkx as nx
 import matplotlib.pyplot as plt
-from collections import Counter
+from collections import Counter, defaultdict
 
 
 # Here we define the a Jackson Network Node.
@@ -15,6 +15,16 @@ def check_dist(r):
     for x, px in r.items():
         assert px >= 0, 'Not a distribution!'
     assert abs(sum(r.values()) - 1.0) < 1e-15, 'Not a distribution!'
+
+def from_to(i, j):
+    return float('{}.1{}'.format(i, j))
+
+def sample(dist):
+    p, s = np.random.sample(), 0
+    for id, prob in dist.items():
+        s += prob
+        if p < s: return id
+    raise ValueError(p, s, id, dist)
 
 class Node:
     '''A Node object in a Jackson network simulates a queue with an exponential
@@ -55,7 +65,7 @@ class RoadNode(Node):
         return self.mu * self.n
 
     def route_to(self):
-        return rid
+        return self.rid
 
 class StationNode(Node):
     def __init__(self, id, n, mu, r):
@@ -65,13 +75,12 @@ class StationNode(Node):
         Node.__init__(self, id, n, mu)
         check_dist(r)
         self.r = r
-        self.rdist = sps.rv_discrete(values=zip(*r.items()))
 
     def service_rate(self):
         return self.mu
 
     def route_to(self):
-        return self.rdist.rvs(1)
+        return sample(self.r)
 
 class Network:
     def __init__(self, n, lam, T, p, k):
@@ -93,10 +102,10 @@ class Network:
             r = {}
             for j in range(n):
                 if i != j:
-                    rn_name = '{}->{}'.format(i, j)
+                    rn_name = from_to(i, j)
                     self.add_node(RoadNode(rn_name, 0, T[i][j], j))
                     r[rn_name] = p[i][j]
-            self.add_node(StationNode(str(i), k[i], lam[i], r))
+            self.add_node(StationNode(i, k[i], lam[i], r))
 
     def add_node(self, node):
         self.graph[node.id] = node
@@ -127,8 +136,8 @@ class Network:
     def as_networkx(self):
         G = nx.DiGraph()
         for nodeid, node in self.graph.items():
-            G.add_node(nodeid, {'label': 'n={}, mu={}'\
-                                .format(node.n, round(node.service_rate(), 3))})
+            G.add_node(nodeid, {'label': 'id={}, n={}, mu={}'\
+                                .format(node.id, node.n, round(node.service_rate(), 3))})
 
         for nodeid, node in self.graph.items():
             if isinstance(node, RoadNode):
@@ -152,13 +161,12 @@ class Network:
         self.t += dt
 
         # Get node to update
-        normalized_rates = [r/total_rates for r in rates]
-        dist = sps.rv_discrete(values=(range(len(rates)), normalized_rates))
-        update = dist.rvs()
+        dist = {nid: node.service_rate()/ total_rates
+                for nid, node in self.graph.items()}
+        update = sample(dist)
 
         # Update node if it isn't empty
-        if self.graph[update].n == 0:
-            return
+        if self.graph[update].n == 0: return
         self.graph[update].add(-1)
 
         # Pick destination
@@ -169,27 +177,24 @@ class Network:
     def get_counts(self):
         return zip(*[(i, node.n) for i, node in self.graph.items()])
 
+    def get_station_counts(self):
+        return zip(*sorted([(nid, node.n) for nid, node in self.graph.items()
+                                          if isinstance(node, StationNode)]))
+
 def full_network(n, lam, T, k):
     ''' Same routing probabilities, constant lam and t. '''
     T = [[T if i != j else 0 for i in range(n)] for j in range(n)]
     p = [[1/float(n-1) if i != j else 0 for i in range(n)] for j in range(n)]
     return Network(n, [lam] * n, T, p, [k] * n)
 
-def linear_network(k, psi, lam, n):
+def l_to_r_attack(n, lam, T, k, psi):
     '''A network of nodes, with a linear virtual passenger chain from node i
     to node i+1, with service rate psi.'''
-    lam, psi = make_callable(lam), make_callable(psi)
-    nw = full_network(k, lam, n=n)
-    for i, node in nw.graph.items():
-        if i == k-1: # Don't alter last node in chain
-            continue
-        node.mu = lambda x: psi(i) + lam(i)
-        for j in node.r:
-            newr = float(lam(i) * node.r[j]) / (lam(i) + psi(i))
-            if j == i+1:
-                newr += float(psi(i)) / (lam(i) + psi(i))
-            node.r[j] = newr
-        node.check_r()
+    nw = full_network(n, lam, T, k)
+    for i in range(n - 1):
+        d = defaultdict(int)
+        d[from_to(i, i+1)] = 1
+        nw.add_attack(i, psi, d)
     return nw
 
 def grid_network_3x3():
