@@ -172,7 +172,7 @@ class Network:
         # Pick destination
         dest = self.graph[update].route_to()
         self.graph[dest].add(1)
-
+        return self.t
 
     def get_counts(self):
         return zip(*[(i, node.n) for i, node in self.graph.items()])
@@ -182,7 +182,7 @@ class Network:
                                           if isinstance(node, StationNode)]))
 
 def full_network(n, lam, T, k):
-    ''' Same routing probabilities, constant lam and t. 
+    ''' Same routing probabilities, constant lam and t.
     n   : number of nodes
     lam : arrival rate of customes (same for all nodes)
     T   : service rate (travel time) at each rode node (same for all nodes)
@@ -202,9 +202,15 @@ def l_to_r_attack(n, lam, T, k, psi):
         nw.add_attack(i, psi, d)
     return nw
 
-def grid_network_3x3():
-    pass
-
+def simulate(network, jumps):
+    ''' Simulate the network for JUMPS jumps, and returns TIMES, the time after
+    each jump. Also returns STATES, the state of the station nodes of the network
+    after each jump. '''
+    states, times = [], []
+    for _ in range(jumps):
+        times.append(network.jump())
+        states.append(network.get_station_counts()[1])
+    return times, states
 
 if __name__ == '__main__':
     N = linear_network(5, 0.1, 1, 15)
