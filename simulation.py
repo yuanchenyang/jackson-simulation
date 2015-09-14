@@ -116,7 +116,7 @@ class Network:
 
         psi  : A number representing the arrival rate of attackers
         alpha: A dictionary where alpha[j] is the attackers' routing probability
-               rate from node i to node i
+               rate from node i to node j
         '''
         node = self.graph[i]
         assert isinstance(node, StationNode), 'Can only attack stations'
@@ -151,8 +151,8 @@ class Network:
     def write_graphviz(self, filename):
         nx.write_dot(self.as_networkx(), filename)
 
-    def tick(self):
-        '''Simulates one tick of a network'''
+    def jump(self):
+        '''Simulates one jump of a network'''
         # Get total rates
         rates = [node.service_rate() for node in self.graph.values()]
         total_rates = float(sum(rates))
@@ -182,7 +182,12 @@ class Network:
                                           if isinstance(node, StationNode)]))
 
 def full_network(n, lam, T, k):
-    ''' Same routing probabilities, constant lam and t. '''
+    ''' Same routing probabilities, constant lam and t. 
+    n   : number of nodes
+    lam : arrival rate of customes (same for all nodes)
+    T   : service rate (travel time) at each rode node (same for all nodes)
+    k   : starting number of cars at each station node, same for all nodes
+    '''
     T = [[T if i != j else 0 for i in range(n)] for j in range(n)]
     p = [[1/float(n-1) if i != j else 0 for i in range(n)] for j in range(n)]
     return Network(n, [lam] * n, T, p, [k] * n)
@@ -204,5 +209,5 @@ def grid_network_3x3():
 if __name__ == '__main__':
     N = linear_network(5, 0.1, 1, 15)
     for _ in range(1000):
-        N.tick()
+        N.jump()
     N.write_graphviz('out.dot')
