@@ -202,6 +202,22 @@ def l_to_r_attack(n, lam, T, k, psi):
         nw.add_attack(i, psi, d)
     return nw
 
+def node_attack(n, lam, T, k, psi):
+    '''all the attacks are issued on node 0
+    '''
+    nw = full_network(n, lam, T, k)
+    d = defaultdict(int)
+    for i in range(n-1):
+        d[from_to(0,i+1)] = 1./(n-1)
+    nw.add_attack(0, psi, d)
+    for i in range(n-1):
+        d = defaultdict(int)
+        for j in range(n-1):
+            if j != i: 
+                d[from_to(i+1,j+1)] = 1./(n-2)
+        nw.add_attack(i+1, 0., d)
+    return nw
+
 def simulate(network, jumps):
     ''' Simulate the network for JUMPS jumps, and returns TIMES, the time after
     each jump. Also returns STATES, the state of the station nodes of the network
