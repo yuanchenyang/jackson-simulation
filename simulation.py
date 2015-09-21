@@ -3,7 +3,7 @@ import scipy.linalg as la
 import scipy.stats as sps
 import networkx as nx
 import matplotlib.pyplot as plt
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, namedtuple
 
 
 # Here we define the a Jackson Network Node.
@@ -26,6 +26,8 @@ def sample(dist):
         if p < s: return id
     raise ValueError(p, s, id, dist)
 
+NodeState = namedtuple('NodeState', ['id', 'n', 'lost', 't'])
+
 class Node:
     '''A Node object in a Jackson network simulates a queue with an exponential
     service time.'''
@@ -39,6 +41,7 @@ class Node:
         self.id = id
         self.n = n
         self.mu = mu
+        self.lost = 0 # Number of passengers lost
 
     def add(self, n):
         self.n += n
@@ -46,6 +49,10 @@ class Node:
     def service_rate(self):
         '''Returns the current service rate of this node'''
         raise NotImplementedError
+
+    def get_state(self, t):
+        '''Returns the time-varying state of this node as a tuple'''
+        return NodeState(self.id, self.n, self.lost, t)
 
     def route_to(self):
         '''Randomly samples a destination (node id) from the routing probability
@@ -106,6 +113,7 @@ class Network:
                     self.add_node(RoadNode(rn_name, 0, T[i][j], j))
                     r[rn_name] = p[i][j]
             self.add_node(StationNode(i, k[i], lam[i], r))
+        self.history = []
 
     def add_node(self, node):
         self.graph[node.id] = node
@@ -151,7 +159,7 @@ class Network:
     def write_graphviz(self, filename):
         nx.write_dot(self.as_networkx(), filename)
 
-    def jump(self):
+    def jump(self, save_history=False):
         '''Simulates one jump of a network'''
         # Get total rates
         rates = [node.service_rate() for node in self.graph.values()]
@@ -163,23 +171,38 @@ class Network:
         # Get node to update
         dist = {nid: node.service_rate()/ total_rates
                 for nid, node in self.graph.items()}
-        update = sample(dist)
+        update_node = self.graph[sample(dist)]
 
         # Update node if it isn't empty
-        if self.graph[update].n == 0: return
-        self.graph[update].add(-1)
+        if update_node.n == 0:
+            # Passenger lost
+            update_node.lost += 1
+            return
+        update_node.add(-1)
 
         # Pick destination
-        dest = self.graph[update].route_to()
+        dest = update_node.route_to()
         self.graph[dest].add(1)
+
+        # Update history
+        if save_history:
+            self.history.append(self.get_states())
         return self.t
+
+    def get_last_history(self):
+        return self.history[-1]
+
+    def get_states(self):
+        '''Returns the states of each node sorted by node_ids'''
+        return sorted([node.get_state(self.t) for node in self.graph.values()],
+                      key=lambda s: s.id)
 
     def get_counts(self):
         return zip(*[(i, node.n) for i, node in self.graph.items()])
 
     def get_station_counts(self):
-        return zip(*sorted([(nid, node.n) for nid, node in self.graph.items()
-                                          if isinstance(node, StationNode)]))
+        return zip(*sorted([(nid, node.n, node.lost) for nid, node in self.graph.items()
+                                                     if isinstance(node, StationNode)]))
 
 def full_network(n, lam, T, k):
     ''' Same routing probabilities, constant lam and t.
@@ -202,15 +225,27 @@ def l_to_r_attack(n, lam, T, k, psi):
         nw.add_attack(i, psi, d)
     return nw
 
+def r_to_l_attack(n, lam, T, k, psi):
+    '''A network of nodes, with a linear virtual passenger chain from node i
+    to node i+1, with service rate psi.'''
+    nw = full_network(n, lam, T, k)
+    for i in range(1, n):
+        d = defaultdict(int)
+        d[from_to(0, i)] = 1
+        nw.add_attack(0, psi, d)
+    return nw
+
 def simulate(network, jumps):
     ''' Simulate the network for JUMPS jumps, and returns TIMES, the time after
-    each jump. Also returns STATES, the state of the station nodes of the network
-    after each jump. '''
-    states, times = [], []
+    each jump. Also returns COUNTS, the counts of the station nodes of the network
+    after each jump, and LOSS, the number of passengers lost '''
+    counts, times, loss = [], [], []
     for _ in range(jumps):
         times.append(network.jump())
-        states.append(network.get_station_counts()[1])
-    return times, states
+        _, count, lost = network.get_station_counts()
+        counts.append(count)
+        loss.append(lost)
+    return times, counts, loss
 
 if __name__ == '__main__':
     N = linear_network(5, 0.1, 1, 15)
