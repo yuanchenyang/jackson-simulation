@@ -233,6 +233,7 @@ def r_to_l_attack(n, lam, T, k, psi):
         d = defaultdict(int)
         d[from_to(0, i)] = 1
         nw.add_attack(0, psi, d)
+    return nw
 
 def node_attack(n, lam, T, k, psi):
     '''all the attacks are issued on node 0
